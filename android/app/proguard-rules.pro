@@ -1,0 +1,3 @@
+-keep class com.dexterous.** { *; }
+-keep class io.flutter.plugins.** { *; }
+-dontwarn javax.annotation.**
