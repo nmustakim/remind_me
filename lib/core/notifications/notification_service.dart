@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
@@ -11,7 +12,7 @@ class NotificationService {
   static final NotificationService instance = NotificationService._();
 
   final FlutterLocalNotificationsPlugin _plugin =
-      FlutterLocalNotificationsPlugin();
+  FlutterLocalNotificationsPlugin();
 
   bool _initialized = false;
 
@@ -130,13 +131,21 @@ class NotificationService {
   }
 
   NotificationDetails get _notificationDetails => NotificationDetails(
-        android: _androidDetails(),
-        iOS: _iosDetails(),
-      );
+    android: _androidDetails(),
+    iOS: _iosDetails(),
+  );
 
   Future<void> scheduleOneShot(tz.TZDateTime scheduledDate) async {
     final themeId = HiveStorage.getThemeId();
     final message = HiveStorage.getMessage();
+
+    // JSON-encoded payload instead of a hand-rolled "key=value|key=value"
+    // string — the old format breaks the moment a custom message contains
+    // a "|" or "=" character, which free-text entry allows.
+    final payload = jsonEncode({
+      'themeId': themeId,
+      'message': message,
+    });
 
     await _plugin.zonedSchedule(
       AppConstants.reminderNotificationId,
@@ -146,8 +155,8 @@ class NotificationService {
       _notificationDetails,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-      payload: 'themeId=$themeId|message=$message',
+      UILocalNotificationDateInterpretation.absoluteTime,
+      payload: payload,
     );
   }
 
@@ -166,10 +175,37 @@ class NotificationService {
       _plugin.getNotificationAppLaunchDetails();
 }
 
+/// Parses a notification payload back into (themeId, message).
+/// Falls back to app defaults if the payload is missing/malformed, so a
+/// bad payload never crashes the tap-to-overlay flow.
+class ReminderPayload {
+  final String themeId;
+  final String message;
+
+  const ReminderPayload({required this.themeId, required this.message});
+
+  static ReminderPayload? tryParse(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return ReminderPayload(
+        themeId: map['themeId'] as String? ?? HiveStorage.getThemeId(),
+        message: map['message'] as String? ?? HiveStorage.getMessage(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
 @pragma('vm:entry-point')
 void _onBackgroundNotificationResponse(NotificationResponse response) {
-  // Handled via getNotificationAppLaunchDetails on cold start,
-  // and via onDidReceiveNotificationResponse on warm/background taps.
+  // Fires when the notification is tapped while the app is fully
+  // terminated (not just backgrounded). By the time this isolate runs,
+  // the main app isolate is not guaranteed to be alive yet, so we can't
+  // reliably route from here. Cold-start routing is instead handled in
+  // main.dart via NotificationService.instance.getLaunchDetails(), which
+  // reads the same tap event once the app isolate is fully up.
 }
 
 void _onNotificationResponse(NotificationResponse response) {
